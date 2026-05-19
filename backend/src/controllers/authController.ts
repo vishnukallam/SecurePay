@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { query } from '../config/db';
+import { query, pool } from '../config/db';
 import { CustomError } from '../middleware/errorHandler';
 import { signupSchema, loginSchema, verifyMfaSchema, changePasswordSchema } from '../validators/auth';
 import {
@@ -43,12 +43,13 @@ const setRefreshTokenCookie = (res: Response, token: string) => {
 };
 
 export const signup = async (req: Request, res: Response, next: NextFunction) => {
+  const client = await pool.connect();
   try {
     const validatedData = signupSchema.parse(req.body);
     const { email, phone, password } = validatedData;
 
     // Check if user already exists
-    const existingUser = await query(
+    const existingUser = await client.query(
       'SELECT id FROM users WHERE email = $1 OR phone = $2',
       [email, phone]
     );
@@ -56,16 +57,17 @@ export const signup = async (req: Request, res: Response, next: NextFunction) =>
     if (existingUser.rowCount && existingUser.rowCount > 0) {
       const err: CustomError = new Error('Email or Phone number already registered');
       err.statusCode = 400;
+      client.release();
       return next(err);
     }
 
     const hashedPassword = await hashPassword(password);
 
     // Start database transaction
-    await query('BEGIN');
+    await client.query('BEGIN');
 
     // Create user
-    const userRes = await query(
+    const userRes = await client.query(
       'INSERT INTO users (email, phone, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING id, email, phone, role',
       [email, phone, hashedPassword, 'USER']
     );
@@ -78,18 +80,19 @@ export const signup = async (req: Request, res: Response, next: NextFunction) =>
     const defaultUpiPinHash = await hashPassword('123456');
 
     // Create Wallet
-    await query(
+    await client.query(
       'INSERT INTO wallets (user_id, balance, upi_id, upi_pin) VALUES ($1, $2, $3, $4)',
       [user.id, 1000.00, upiId, defaultUpiPinHash] // Starting bonus of 1000 INR
     );
 
     // Initial signups get standard reward
-    await query(
+    await client.query(
       "INSERT INTO rewards (user_id, amount, description, claimed) VALUES ($1, $2, $3, TRUE)",
       [user.id, 50.00, 'Welcome Reward points', true]
     );
 
-    await query('COMMIT');
+    await client.query('COMMIT');
+    client.release();
 
     logger.info(`User registered successfully: ${email}`);
 
@@ -103,7 +106,12 @@ export const signup = async (req: Request, res: Response, next: NextFunction) =>
       },
     });
   } catch (error) {
-    await query('ROLLBACK');
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      // Ignore rollback errors if transaction was not active
+    }
+    client.release();
     next(error);
   }
 };
@@ -297,54 +305,66 @@ export const refreshToken = async (req: Request, res: Response, next: NextFuncti
         return next(customErr);
       }
 
-      const userRes = await query(
-        'SELECT id, email, phone, role, status FROM users WHERE id = $1',
-        [session.user_id]
-      );
+      const client = await pool.connect();
+      try {
+        const userRes = await client.query(
+          'SELECT id, email, phone, role, status FROM users WHERE id = $1',
+          [session.user_id]
+        );
 
-      if (userRes.rowCount === 0 || userRes.rows[0].status === 'BLOCKED') {
-        const customErr: CustomError = new Error('User inactive or not found');
-        customErr.statusCode = 401;
-        return next(customErr);
-      }
+        if (userRes.rowCount === 0 || userRes.rows[0].status === 'BLOCKED') {
+          const customErr: CustomError = new Error('User inactive or not found');
+          customErr.statusCode = 401;
+          client.release();
+          return next(customErr);
+        }
 
-      const user = userRes.rows[0];
+        const user = userRes.rows[0];
 
-      // Rotate tokens
-      const { accessToken, refreshToken: newRefreshToken } = generateTokens(user);
+        // Rotate tokens
+        const { accessToken, refreshToken: newRefreshToken } = generateTokens(user);
 
-      // Start database transaction to replace the refresh token (session rotation)
-      await query('BEGIN');
-      
-      // Revoke old session
-      await query('UPDATE sessions SET is_revoked = TRUE WHERE refresh_token = $1', [token]);
+        // Start database transaction to replace the refresh token (session rotation)
+        await client.query('BEGIN');
+        
+        // Revoke old session
+        await client.query('UPDATE sessions SET is_revoked = TRUE WHERE refresh_token = $1', [token]);
 
-      // Save new session
-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
-      await query(
-        'INSERT INTO sessions (user_id, refresh_token, device_fingerprint, ip_address, expires_at) VALUES ($1, $2, $3, $4, $5)',
-        [user.id, newRefreshToken, 'ROTATED_DEVICE', req.ip || 'unknown', expiresAt]
-      );
+        // Save new session
+        const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+        await client.query(
+          'INSERT INTO sessions (user_id, refresh_token, device_fingerprint, ip_address, expires_at) VALUES ($1, $2, $3, $4, $5)',
+          [user.id, newRefreshToken, 'ROTATED_DEVICE', req.ip || 'unknown', expiresAt]
+        );
 
-      await query('COMMIT');
+        await client.query('COMMIT');
+        client.release();
 
-      setRefreshTokenCookie(res, newRefreshToken);
+        setRefreshTokenCookie(res, newRefreshToken);
 
-      res.status(200).json({
-        status: 'success',
-        data: {
-          accessToken,
-          user: {
-            id: user.id,
-            email: user.email,
-            phone: user.phone,
-            role: user.role,
+        res.status(200).json({
+          status: 'success',
+          data: {
+            accessToken,
+            user: {
+              id: user.id,
+              email: user.email,
+              phone: user.phone,
+              role: user.role,
+            },
           },
-        },
-      });
+        });
+      } catch (innerError) {
+        try {
+          await client.query('ROLLBACK');
+        } catch (rollError) {
+          // Ignore rollback errors if transaction was not active
+        }
+        client.release();
+        next(innerError);
+      }
     });
   } catch (error) {
-    await query('ROLLBACK');
     next(error);
   }
 };

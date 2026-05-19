@@ -1,21 +1,21 @@
 import { Response, NextFunction } from 'express';
-import { query } from '../config/db';
+import { query, pool } from '../config/db';
 import { CustomError } from '../middleware/errorHandler';
 import { addMoneySchema, transferSchema, setUpiPinSchema, payBillSchema } from '../validators/payment';
 import { encrypt, decrypt, comparePassword, hashPassword } from '../utils/crypto';
 import { logger } from '../config/logger';
 
 // Helper to generate cashback rewards (e.g., 10% chance of winning between 5 and 100 INR for transfers over 100 INR)
-const handleCashbackReward = async (userId: string, amount: number) => {
+const handleCashbackReward = async (client: any, userId: string, amount: number) => {
   if (amount >= 100 && Math.random() < 0.20) { // 20% chance
     const rewardAmount = parseFloat((Math.random() * (50 - 5) + 5).toFixed(2));
-    await query(
+    await client.query(
       "INSERT INTO rewards (user_id, amount, description, claimed) VALUES ($1, $2, $3, TRUE)",
       [userId, rewardAmount, `Cashback for transfer of ₹${amount}`, true]
     );
 
     // Update wallet balance directly
-    await query(
+    await client.query(
       "UPDATE wallets SET balance = balance + $1 WHERE user_id = $2",
       [rewardAmount, userId]
     );
@@ -50,16 +50,17 @@ export const getWalletInfo = async (req: any, res: Response, next: NextFunction)
 };
 
 export const addMoney = async (req: any, res: Response, next: NextFunction) => {
+  const client = await pool.connect();
   try {
     const validatedData = addMoneySchema.parse(req.body);
     const { amount, cardNumber, cardHolder } = validatedData;
     const userId = req.user.id;
 
     // Start transaction
-    await query('BEGIN');
+    await client.query('BEGIN');
 
     // Retrieve and lock wallet row to prevent concurrent race conditions
-    const walletRes = await query(
+    const walletRes = await client.query(
       'SELECT id, balance FROM wallets WHERE user_id = $1 FOR UPDATE',
       [userId]
     );
@@ -67,7 +68,8 @@ export const addMoney = async (req: any, res: Response, next: NextFunction) => {
     if (walletRes.rowCount === 0) {
       const err: CustomError = new Error('Wallet not found');
       err.statusCode = 404;
-      await query('ROLLBACK');
+      await client.query('ROLLBACK');
+      client.release();
       return next(err);
     }
 
@@ -75,7 +77,7 @@ export const addMoney = async (req: any, res: Response, next: NextFunction) => {
     const newBalance = parseFloat(wallet.balance) + amount;
 
     // Update wallet balance
-    await query(
+    await client.query(
       'UPDATE wallets SET balance = $1, updated_at = CURRENT_TIMESTAMP WHERE user_id = $2',
       [newBalance, userId]
     );
@@ -89,13 +91,14 @@ export const addMoney = async (req: any, res: Response, next: NextFunction) => {
     const encryptedMetadata = encrypt(metadata);
 
     // Save transaction record
-    await query(
+    await client.query(
       `INSERT INTO transactions (sender_id, receiver_id, amount, type, status, encrypted_metadata)
        VALUES (NULL, $1, $2, 'WALLET_ADD', 'SUCCESS', $3)`,
       [userId, amount, encryptedMetadata]
     );
 
-    await query('COMMIT');
+    await client.query('COMMIT');
+    client.release();
 
     logger.info(`Successfully added ₹${amount} to wallet of user ${userId}`);
 
@@ -107,12 +110,18 @@ export const addMoney = async (req: any, res: Response, next: NextFunction) => {
       },
     });
   } catch (error) {
-    await query('ROLLBACK');
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollError) {
+      // Ignore rollback errors if transaction was not active
+    }
+    client.release();
     next(error);
   }
 };
 
 export const transferMoney = async (req: any, res: Response, next: NextFunction) => {
+  const client = await pool.connect();
   try {
     const validatedData = transferSchema.parse(req.body);
     const { recipient, amount, upiPin, otpCode } = validatedData;
@@ -126,11 +135,12 @@ export const transferMoney = async (req: any, res: Response, next: NextFunction)
       const otpHash = await hashPassword(otp);
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 mins
 
-      await query(
+      await client.query(
         'INSERT INTO mfa_otps (user_id, type, code_hash, expires_at) VALUES ($1, $2, $3, $4)',
         [senderId, 'EMAIL', otpHash, expiresAt]
       );
 
+      client.release();
       return res.status(200).json({
         status: 'otp_required',
         message: 'High-value transaction: An OTP code has been sent to your registered email for validation.',
@@ -139,7 +149,7 @@ export const transferMoney = async (req: any, res: Response, next: NextFunction)
 
     if (amount >= HIGH_VALUE_THRESHOLD && otpCode) {
       // Validate OTP
-      const otpRes = await query(
+      const otpRes = await client.query(
         `SELECT id, code_hash FROM mfa_otps 
          WHERE user_id = $1 AND type = 'EMAIL' AND expires_at > CURRENT_TIMESTAMP 
          ORDER BY created_at DESC LIMIT 1`,
@@ -149,27 +159,29 @@ export const transferMoney = async (req: any, res: Response, next: NextFunction)
       if (otpRes.rowCount === 0) {
         const err: CustomError = new Error('OTP expired or invalid');
         err.statusCode = 400;
+        client.release();
         return next(err);
       }
 
       const isOtpValid = await comparePassword(otpCode, otpRes.rows[0].code_hash);
       if (!isOtpValid) {
         // Log suspicious high-value failure
-        await query(
+        await client.query(
           'INSERT INTO security_logs (user_id, event_type, severity, details, ip_address) VALUES ($1, $2, $3, $4, $5)',
           [senderId, 'HIGH_VALUE_OTP_FAILED', 'HIGH', JSON.stringify({ amount }), req.ip || 'unknown']
         );
         const err: CustomError = new Error('Invalid OTP code');
         err.statusCode = 400;
+        client.release();
         return next(err);
       }
 
       // Cleanup OTP
-      await query('DELETE FROM mfa_otps WHERE id = $1', [otpRes.rows[0].id]);
+      await client.query('DELETE FROM mfa_otps WHERE id = $1', [otpRes.rows[0].id]);
     }
 
     // Lookup recipient (can be Email, Phone, or UPI ID)
-    const recipientRes = await query(
+    const recipientRes = await client.query(
       `SELECT u.id, u.email, u.phone, u.status, w.upi_id 
        FROM users u
        JOIN wallets w ON w.user_id = u.id
@@ -180,6 +192,7 @@ export const transferMoney = async (req: any, res: Response, next: NextFunction)
     if (recipientRes.rowCount === 0) {
       const err: CustomError = new Error('Recipient not found or does not have a linked wallet');
       err.statusCode = 404;
+      client.release();
       return next(err);
     }
 
@@ -188,20 +201,22 @@ export const transferMoney = async (req: any, res: Response, next: NextFunction)
     if (receiver.id === senderId) {
       const err: CustomError = new Error('Cannot transfer money to yourself');
       err.statusCode = 400;
+      client.release();
       return next(err);
     }
 
     if (receiver.status === 'BLOCKED') {
       const err: CustomError = new Error('Cannot transfer money to a blocked recipient account');
       err.statusCode = 403;
+      client.release();
       return next(err);
     }
 
     // Start Database Transaction
-    await query('BEGIN');
+    await client.query('BEGIN');
 
     // Retrieve sender wallet + UPI PIN and Row-Lock it
-    const senderWalletRes = await query(
+    const senderWalletRes = await client.query(
       'SELECT id, balance, upi_pin, upi_id FROM wallets WHERE user_id = $1 FOR UPDATE',
       [senderId]
     );
@@ -209,7 +224,8 @@ export const transferMoney = async (req: any, res: Response, next: NextFunction)
     if (senderWalletRes.rowCount === 0) {
       const err: CustomError = new Error('Sender wallet not found');
       err.statusCode = 404;
-      await query('ROLLBACK');
+      await client.query('ROLLBACK');
+      client.release();
       return next(err);
     }
 
@@ -219,14 +235,15 @@ export const transferMoney = async (req: any, res: Response, next: NextFunction)
     const isPinValid = await comparePassword(upiPin, senderWallet.upi_pin);
     if (!isPinValid) {
       // Log failed UPI PIN attempt
-      await query(
+      await client.query(
         'INSERT INTO security_logs (user_id, event_type, severity, details, ip_address) VALUES ($1, $2, $3, $4, $5)',
         [senderId, 'INVALID_UPI_PIN', 'MEDIUM', JSON.stringify({ amount }), req.ip || 'unknown']
       );
 
       const err: CustomError = new Error('Invalid UPI PIN');
       err.statusCode = 400;
-      await query('ROLLBACK');
+      await client.query('ROLLBACK');
+      client.release();
       return next(err);
     }
 
@@ -235,12 +252,13 @@ export const transferMoney = async (req: any, res: Response, next: NextFunction)
     if (senderBalance < amount) {
       const err: CustomError = new Error('Insufficient wallet balance');
       err.statusCode = 400;
-      await query('ROLLBACK');
+      await client.query('ROLLBACK');
+      client.release();
       return next(err);
     }
 
     // Retrieve and Row-Lock Receiver's Wallet
-    const receiverWalletRes = await query(
+    const receiverWalletRes = await client.query(
       'SELECT id, balance FROM wallets WHERE user_id = $1 FOR UPDATE',
       [receiver.id]
     );
@@ -248,7 +266,8 @@ export const transferMoney = async (req: any, res: Response, next: NextFunction)
     if (receiverWalletRes.rowCount === 0) {
       const err: CustomError = new Error('Recipient wallet not found');
       err.statusCode = 404;
-      await query('ROLLBACK');
+      await client.query('ROLLBACK');
+      client.release();
       return next(err);
     }
 
@@ -258,8 +277,8 @@ export const transferMoney = async (req: any, res: Response, next: NextFunction)
     const newSenderBalance = senderBalance - amount;
     const newReceiverBalance = parseFloat(receiverWallet.balance) + amount;
 
-    await query('UPDATE wallets SET balance = $1 WHERE user_id = $2', [newSenderBalance, senderId]);
-    await query('UPDATE wallets SET balance = $1 WHERE user_id = $2', [newReceiverBalance, receiver.id]);
+    await client.query('UPDATE wallets SET balance = $1 WHERE user_id = $2', [newSenderBalance, senderId]);
+    await client.query('UPDATE wallets SET balance = $1 WHERE user_id = $2', [newReceiverBalance, receiver.id]);
 
     // Encrypt transfer metadata for privacy/compliance (AES-256-GCM)
     const metadata = JSON.stringify({
@@ -270,16 +289,17 @@ export const transferMoney = async (req: any, res: Response, next: NextFunction)
     const encryptedMetadata = encrypt(metadata);
 
     // Save transaction
-    await query(
+    await client.query(
       `INSERT INTO transactions (sender_id, receiver_id, amount, type, status, encrypted_metadata)
        VALUES ($1, $2, $3, 'TRANSFER', 'SUCCESS', $4)`,
       [senderId, receiver.id, amount, encryptedMetadata]
     );
 
     // Handle Cashback Rewards
-    const cashback = await handleCashbackReward(senderId, amount);
+    const cashback = await handleCashbackReward(client, senderId, amount);
 
-    await query('COMMIT');
+    await client.query('COMMIT');
+    client.release();
 
     logger.info(`Successful P2P Transfer of ₹${amount} from user ${senderId} to receiver ${receiver.id}`);
 
@@ -292,7 +312,12 @@ export const transferMoney = async (req: any, res: Response, next: NextFunction)
       },
     });
   } catch (error) {
-    await query('ROLLBACK');
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollError) {
+      // Ignore rollback errors if transaction was not active
+    }
+    client.release();
     next(error);
   }
 };
@@ -375,10 +400,12 @@ export const getTransactionHistory = async (req: any, res: Response, next: NextF
 };
 
 export const payBill = async (req: any, res: Response, next: NextFunction) => {
+  const client = await pool.connect();
   try {
     if (req.user?.role === 'ADMIN') {
       const err: CustomError = new Error('Administrative accounts are not permitted to make utility bill payments');
       err.statusCode = 403;
+      client.release();
       return next(err);
     }
 
@@ -387,10 +414,10 @@ export const payBill = async (req: any, res: Response, next: NextFunction) => {
     const userId = req.user.id;
 
     // Start transaction
-    await query('BEGIN');
+    await client.query('BEGIN');
 
     // Lock wallet row
-    const walletRes = await query(
+    const walletRes = await client.query(
       'SELECT id, balance, upi_pin, upi_id FROM wallets WHERE user_id = $1 FOR UPDATE',
       [userId]
     );
@@ -398,7 +425,8 @@ export const payBill = async (req: any, res: Response, next: NextFunction) => {
     if (walletRes.rowCount === 0) {
       const err: CustomError = new Error('Wallet not found');
       err.statusCode = 404;
-      await query('ROLLBACK');
+      await client.query('ROLLBACK');
+      client.release();
       return next(err);
     }
 
@@ -409,7 +437,8 @@ export const payBill = async (req: any, res: Response, next: NextFunction) => {
     if (!isPinValid) {
       const err: CustomError = new Error('Invalid UPI PIN');
       err.statusCode = 400;
-      await query('ROLLBACK');
+      await client.query('ROLLBACK');
+      client.release();
       return next(err);
     }
 
@@ -418,14 +447,15 @@ export const payBill = async (req: any, res: Response, next: NextFunction) => {
     if (balance < amount) {
       const err: CustomError = new Error('Insufficient wallet balance to pay bill');
       err.statusCode = 400;
-      await query('ROLLBACK');
+      await client.query('ROLLBACK');
+      client.release();
       return next(err);
     }
 
     const newBalance = balance - amount;
 
     // Update wallet
-    await query(
+    await client.query(
       'UPDATE wallets SET balance = $1 WHERE user_id = $2',
       [newBalance, userId]
     );
@@ -439,13 +469,14 @@ export const payBill = async (req: any, res: Response, next: NextFunction) => {
     const encryptedMetadata = encrypt(metadata);
 
     // Save transaction
-    await query(
+    await client.query(
       `INSERT INTO transactions (sender_id, receiver_id, amount, type, status, encrypted_metadata)
        VALUES ($1, NULL, $2, 'BILL', 'SUCCESS', $3)`,
       [userId, amount, encryptedMetadata]
     );
 
-    await query('COMMIT');
+    await client.query('COMMIT');
+    client.release();
 
     logger.info(`Successfully paid ${type} bill of ₹${amount} by user ${userId}`);
 
@@ -457,7 +488,12 @@ export const payBill = async (req: any, res: Response, next: NextFunction) => {
       },
     });
   } catch (error) {
-    await query('ROLLBACK');
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollError) {
+      // Ignore rollback errors if transaction was not active
+    }
+    client.release();
     next(error);
   }
 };
