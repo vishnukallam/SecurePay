@@ -24,7 +24,7 @@ const StyledTextField = TextField as any;
 const StyledDialog = Dialog as any;
 
 const SendMoney: React.FC = () => {
-  const { triggerTransfer, fetchUserProfile } = useAuth();
+  const { user, triggerTransfer, fetchUserProfile } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const { enqueueSnackbar } = useSnackbar();
@@ -97,6 +97,12 @@ const SendMoney: React.FC = () => {
   const handleTransactionSubmit = async () => {
     if (upiPin.length !== 6) {
       enqueueSnackbar('UPI PIN must be exactly 6 digits', { variant: 'error' });
+      return;
+    }
+
+    if (isBillMode && user?.role === 'ADMIN') {
+      setErrorMessage('Administrators are not permitted to make utility bill payments.');
+      enqueueSnackbar('Administrators are not permitted to make utility bill payments.', { variant: 'error' });
       return;
     }
 
