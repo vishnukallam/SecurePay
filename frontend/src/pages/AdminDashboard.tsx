@@ -212,7 +212,9 @@ const AdminDashboard: React.FC = () => {
                       <TableCell>{item.email}</TableCell>
                       <TableCell>{item.phone}</TableCell>
                       <TableCell>{item.upi_id || 'None'}</TableCell>
-                      <TableCell>₹{item.balance.toFixed(2)}</TableCell>
+                      <TableCell sx={{ color: 'text.secondary', fontStyle: 'italic', fontWeight: 500 }}>
+                        Restricted
+                      </TableCell>
                       <TableCell>
                         <Chip label={item.role} size="small" color={item.role === 'ADMIN' ? 'primary' : 'default'} />
                       </TableCell>
