@@ -6,9 +6,36 @@ import { Request, Response, NextFunction } from 'express';
 // @ts-ignore
 import xss from 'xss-clean';
 
-// CORS configuration
+// Dynamic CORS configuration parsing
+const allowedOrigins = process.env.CLIENT_URL
+  ? process.env.CLIENT_URL.split(',').map((url) => url.trim().replace(/\/$/, ''))
+  : [];
+
+// Standard Vercel domains and local dev URLs to ensure immediate resolution on deploy
+const vercelFallbacks = [
+  'https://secure-pay-gamma.vercel.app',
+  'https://secure-pay-psi.vercel.app',
+  'http://localhost:5173',
+  'http://localhost:3000'
+];
+
+vercelFallbacks.forEach((host) => {
+  if (!allowedOrigins.includes(host)) {
+    allowedOrigins.push(host);
+  }
+});
+
 export const corsMiddleware = cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:5173',
+  origin: (origin, callback) => {
+    // Allow server-to-server or non-browser/cURL requests where origin is undefined
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error(`Origin ${origin} is not allowed by CORS`));
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
