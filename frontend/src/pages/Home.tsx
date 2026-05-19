@@ -292,7 +292,13 @@ const Home: React.FC = () => {
           <motion.div
             key={index}
             whileHover={{ scale: 1.05 }}
-            onClick={() => navigate('/transfer', { state: { billMode: true, billType: item.type } })}
+            onClick={() => {
+              if (user?.role === 'ADMIN') {
+                enqueueSnackbar('Administrators are not permitted to make utility bill payments.', { variant: 'error' });
+                return;
+              }
+              navigate('/transfer', { state: { billMode: true, billType: item.type } });
+            }}
             style={{ cursor: 'pointer', textAlign: 'center' }}
           >
             <Paper
