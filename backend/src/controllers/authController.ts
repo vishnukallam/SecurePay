@@ -87,7 +87,7 @@ export const signup = async (req: Request, res: Response, next: NextFunction) =>
 
     // Initial signups get standard reward
     await client.query(
-      "INSERT INTO rewards (user_id, amount, description, claimed) VALUES ($1, $2, $3, TRUE)",
+      "INSERT INTO rewards (user_id, amount, description, claimed) VALUES ($1, $2, $3, $4)",
       [user.id, 50.00, 'Welcome Reward points', true]
     );
 
