@@ -57,6 +57,17 @@ app.get('/api/v1/ping', (req, res) => {
   });
 });
 
+// Root path health check (for Render load balancer uptime pings)
+app.route('/').get((req, res) => {
+  res.status(200).json({
+    status: 'success',
+    message: 'SecurePay API Server is active and healthy',
+    timestamp: new Date(),
+  });
+}).head((req, res) => {
+  res.status(200).end();
+});
+
 // Register Module Routes
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/payment', paymentRoutes);
