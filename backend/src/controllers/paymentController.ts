@@ -10,7 +10,7 @@ const handleCashbackReward = async (client: any, userId: string, amount: number)
   if (amount >= 100 && Math.random() < 0.20) { // 20% chance
     const rewardAmount = parseFloat((Math.random() * (50 - 5) + 5).toFixed(2));
     await client.query(
-      "INSERT INTO rewards (user_id, amount, description, claimed) VALUES ($1, $2, $3, TRUE)",
+      "INSERT INTO rewards (user_id, amount, description, claimed) VALUES ($1, $2, $3, $4)",
       [userId, rewardAmount, `Cashback for transfer of ₹${amount}`, true]
     );
 
