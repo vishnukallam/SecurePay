@@ -240,50 +240,61 @@ const Settings: React.FC = () => {
               <Lock color="primary" /> Change Password
             </Typography>
 
-            <form onSubmit={handleSubmitPassword(handlePasswordSubmit)}>
-              <StyledTextField
-                fullWidth
-                label="Current Password"
-                type="password"
-                variant="outlined"
-                margin="normal"
-                error={!!passwordErrors.currentPassword}
-                helperText={passwordErrors.currentPassword?.message}
-                {...(registerPassword('currentPassword') as any)}
-              />
+            {user?.role === 'ADMIN' ? (
+              <Box sx={{ p: 3, bgcolor: 'error.light', color: 'error.dark', borderRadius: 3, border: '1px solid', borderColor: 'error.main', mt: 1 }}>
+                <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>
+                  Access Restricted
+                </Typography>
+                <Typography variant="body2">
+                  Administrative accounts are restricted from modifying passwords via the interface for audit security.
+                </Typography>
+              </Box>
+            ) : (
+              <form onSubmit={handleSubmitPassword(handlePasswordSubmit)}>
+                <StyledTextField
+                  fullWidth
+                  label="Current Password"
+                  type="password"
+                  variant="outlined"
+                  margin="normal"
+                  error={!!passwordErrors.currentPassword}
+                  helperText={passwordErrors.currentPassword?.message}
+                  {...(registerPassword('currentPassword') as any)}
+                />
 
-              <StyledTextField
-                fullWidth
-                label="New Password"
-                type="password"
-                variant="outlined"
-                margin="normal"
-                error={!!passwordErrors.newPassword}
-                helperText={passwordErrors.newPassword?.message}
-                {...(registerPassword('newPassword') as any)}
-              />
+                <StyledTextField
+                  fullWidth
+                  label="New Password"
+                  type="password"
+                  variant="outlined"
+                  margin="normal"
+                  error={!!passwordErrors.newPassword}
+                  helperText={passwordErrors.newPassword?.message}
+                  {...(registerPassword('newPassword') as any)}
+                />
 
-              <StyledTextField
-                fullWidth
-                label="Confirm New Password"
-                type="password"
-                variant="outlined"
-                margin="normal"
-                error={!!passwordErrors.confirmNewPassword}
-                helperText={passwordErrors.confirmNewPassword?.message}
-                {...(registerPassword('confirmNewPassword') as any)}
-              />
+                <StyledTextField
+                  fullWidth
+                  label="Confirm New Password"
+                  type="password"
+                  variant="outlined"
+                  margin="normal"
+                  error={!!passwordErrors.confirmNewPassword}
+                  helperText={passwordErrors.confirmNewPassword?.message}
+                  {...(registerPassword('confirmNewPassword') as any)}
+                />
 
-              <Button
-                fullWidth
-                type="submit"
-                variant="contained"
-                disabled={isLoading}
-                sx={{ py: 1.5, mt: 3, borderRadius: 4 }}
-              >
-                {isLoading ? <CircularProgress size={24} color="inherit" /> : 'Update Password'}
-              </Button>
-            </form>
+                <Button
+                  fullWidth
+                  type="submit"
+                  variant="contained"
+                  disabled={isLoading}
+                  sx={{ py: 1.5, mt: 3, borderRadius: 4 }}
+                >
+                  {isLoading ? <CircularProgress size={24} color="inherit" /> : 'Update Password'}
+                </Button>
+              </form>
+            )}
           </CardContent>
         </Card>
       </Box>
