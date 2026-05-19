@@ -1,7 +1,10 @@
+import dotenv from 'dotenv';
+// Load Environment Variables immediately at the absolute top before any other imports are evaluated
+dotenv.config();
+
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import morgan from 'morgan';
-import dotenv from 'dotenv';
 import 'express-async-errors'; // Async error handling support
 
 // Configurations & DB
@@ -23,9 +26,6 @@ import { errorHandler } from './middleware/errorHandler';
 import authRoutes from './routes/authRoutes';
 import paymentRoutes from './routes/paymentRoutes';
 import adminRoutes from './routes/adminRoutes';
-
-// Load Environment Variables
-dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;

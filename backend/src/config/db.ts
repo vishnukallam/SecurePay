@@ -24,7 +24,9 @@ const connectionString = process.env.DATABASE_URL || 'postgresql://postgres:post
 
 export const pool = new Pool({
   connectionString,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined,
+  ssl: connectionString.includes('neon.tech') || process.env.NODE_ENV === 'production'
+    ? { rejectUnauthorized: false }
+    : undefined,
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 2000,
