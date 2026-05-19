@@ -57,7 +57,7 @@ export const getAllUsers = async (req: any, res: Response, next: NextFunction) =
   try {
     const usersRes = await query(`
       SELECT u.id, u.email, u.phone, u.role, u.status, u.is_mfa_enabled, u.created_at,
-             w.balance, w.upi_id
+             0.00 as balance, w.upi_id
       FROM users u
       LEFT JOIN wallets w ON w.user_id = u.id
       ORDER BY u.created_at DESC
