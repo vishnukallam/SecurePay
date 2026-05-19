@@ -376,6 +376,12 @@ export const getTransactionHistory = async (req: any, res: Response, next: NextF
 
 export const payBill = async (req: any, res: Response, next: NextFunction) => {
   try {
+    if (req.user?.role === 'ADMIN') {
+      const err: CustomError = new Error('Administrative accounts are not permitted to make utility bill payments');
+      err.statusCode = 403;
+      return next(err);
+    }
+
     const validatedData = payBillSchema.parse(req.body);
     const { type, billerId, amount, upiPin } = validatedData;
     const userId = req.user.id;
