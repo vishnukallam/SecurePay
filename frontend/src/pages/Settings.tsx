@@ -12,8 +12,10 @@ import {
   CircularProgress,
   Switch,
   FormControlLabel,
+  InputAdornment,
+  IconButton,
 } from '@mui/material';
-import { Lock, Security, AccountBalance } from '@mui/icons-material';
+import { Lock, Security, AccountBalance, Visibility, VisibilityOff } from '@mui/icons-material';
 import { useAuth } from '../store/AuthContext';
 import { api } from '../services/api';
 import { useSnackbar } from 'notistack';
@@ -43,6 +45,8 @@ type ChangePasswordFormData = z.infer<typeof changePasswordFormSchema>;
 const Settings: React.FC = () => {
   const { user, fetchUserProfile } = useAuth();
   const { enqueueSnackbar } = useSnackbar();
+
+  const [showPassword, setShowPassword] = useState(false);
 
   // Change Password Form
   const {
@@ -254,34 +258,61 @@ const Settings: React.FC = () => {
                 <StyledTextField
                   fullWidth
                   label="Current Password"
-                  type="password"
+                  type={showPassword ? 'text' : 'password'}
                   variant="outlined"
                   margin="normal"
                   error={!!passwordErrors.currentPassword}
                   helperText={passwordErrors.currentPassword?.message}
                   {...(registerPassword('currentPassword') as any)}
+                  InputProps={{
+                    endAdornment: (
+                      <InputAdornment position="end">
+                        <IconButton onClick={() => setShowPassword(!showPassword)} edge="end">
+                          {showPassword ? <VisibilityOff /> : <Visibility />}
+                        </IconButton>
+                      </InputAdornment>
+                    ),
+                  }}
                 />
 
                 <StyledTextField
                   fullWidth
                   label="New Password"
-                  type="password"
+                  type={showPassword ? 'text' : 'password'}
                   variant="outlined"
                   margin="normal"
                   error={!!passwordErrors.newPassword}
                   helperText={passwordErrors.newPassword?.message}
                   {...(registerPassword('newPassword') as any)}
+                  InputProps={{
+                    endAdornment: (
+                      <InputAdornment position="end">
+                        <IconButton onClick={() => setShowPassword(!showPassword)} edge="end">
+                          {showPassword ? <VisibilityOff /> : <Visibility />}
+                        </IconButton>
+                      </InputAdornment>
+                    ),
+                  }}
                 />
 
                 <StyledTextField
                   fullWidth
                   label="Confirm New Password"
-                  type="password"
+                  type={showPassword ? 'text' : 'password'}
                   variant="outlined"
                   margin="normal"
                   error={!!passwordErrors.confirmNewPassword}
                   helperText={passwordErrors.confirmNewPassword?.message}
                   {...(registerPassword('confirmNewPassword') as any)}
+                  InputProps={{
+                    endAdornment: (
+                      <InputAdornment position="end">
+                        <IconButton onClick={() => setShowPassword(!showPassword)} edge="end">
+                          {showPassword ? <VisibilityOff /> : <Visibility />}
+                        </IconButton>
+                      </InputAdornment>
+                    ),
+                  }}
                 />
 
                 <Button
